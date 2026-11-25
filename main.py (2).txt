@@ -1,0 +1,229 @@
+# MODIH BOT V4 - 24/7 READY + Keep Alive
+import sys
+import subprocess
+import os
+import random
+import asyncio
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+# Keep Alive - Render / UptimeRobot ke liye, bot ko sone nahi dega
+def keep_alive():
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Modih is online")
+        def log_message(self, format, *args):
+            return
+    try:
+        port = int(os.getenv("PORT", 10000))
+        server = HTTPServer(("0.0.0.0", port), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        print(f"Keep-alive server chal raha hai port {port} pe")
+    except Exception as e:
+        print("Keep-alive start nahi hua:", e)
+
+keep_alive()
+
+def auto_install(import_name, pip_name):
+    try:
+        __import__(import_name)
+        print(pip_name + " pehle se hai")
+    except ImportError:
+        print(pip_name + " install ho raha hai...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", pip_name])
+            print(pip_name + " install ho gaya")
+        except Exception as e:
+            print(pip_name + " install nahi hua: " + str(e))
+
+auto_install("discord", "discord.py")
+auto_install("dotenv", "python-dotenv")
+auto_install("requests", "requests")
+
+import discord
+from discord.ext import commands
+import requests
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except:
+    pass
+
+DISCORD_TOKEN = "YAHAN_APNA_BOT_TOKEN_DAALO"
+GEMINI_KEY = ""
+CONFESS_CHANNEL_ID = 0
+
+if DISCORD_TOKEN == "YAHAN_APNA_BOT_TOKEN_DAALO" or not DISCORD_TOKEN.strip():
+    DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
+if not GEMINI_KEY.strip():
+    GEMINI_KEY = os.getenv("GEMINI_KEY", "")
+if CONFESS_CHANNEL_ID == 0:
+    try:
+        CONFESS_CHANNEL_ID = int(os.getenv("CONFESS_CHANNEL_ID", "0"))
+    except:
+        CONFESS_CHANNEL_ID = 0
+
+if GEMINI_KEY:
+    print("Gemini key mili, AI mode ON")
+else:
+    print("Gemini key nahi mili, offline mode chalega")
+
+def get_offline_reply(prompt):
+    p = prompt.lower()
+    if "neend" in p or "nind" in p:
+        return "Neend nahi aa rahi? Chal dono jaag lete hai, mai yahin hu. Dil ki baat karni hai to bol de"
+    if "shayari" in p:
+        return random.choice([
+            "Teri yaad me raat bhar jaage hai hum, neend to bas bahana hai, asli wajah tum ho.",
+            "Chand ko dekh ke socha, chand se zyada pyara to tu hai, par bolne se dar lagta hai.",
+            "Dil ki baatein dil me hi reh gayi, tu samne tha aur hum chup reh gaye."
+        ])
+    if "joke" in p or "hasi" in p or "funny" in p:
+        return "Ek ladka bola - bhai mujhe neend nahi aa rahi. Dost bola - to so ja. Ladka bola - arey yahi to problem hai"
+    if "hi" in p or "hello" in p or "hey" in p or "kaise ho" in p:
+        return "Haan bhai bol, Modih yahin hai. Kya haal hai? Neend nahi aa rahi ya dil ki baat karni hai?"
+    if "crush" in p or "pyar" in p or "love" in p:
+        return "Ooo crush wala scene hai? Naam mat bata, bas itna bata - usne seen kiya ya reply bhi diya?"
+    if "bore" in p:
+        return "Bore ho raha hai? Chal ek kaam kar, !confess me apna secret likh de, maza aa jayega"
+    return random.choice([
+        "Haan bhai sun raha hu, thoda aur detail me bata kya hua?",
+        "Samajh gaya, aur fir kya hua? Puri story suna.",
+        "Achaa? Ye to interesting hai, aur bata."
+    ])
+
+def get_ai_reply_sync(prompt):
+    if not GEMINI_KEY:
+        return get_offline_reply(prompt)
+    try:
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + GEMINI_KEY
+        system = "Tu Modih hai, Aise Hi Discord server ka AI dost. Hinglish me baat kar, cozy, chatpata, funny aur thoda romantic vibe me. Reply chota aur dil se de."
+        payload = {"contents": [{"parts": [{"text": system + "\nUser: " + prompt}]}]}
+        r = requests.post(url, json=payload, timeout=15)
+        data = r.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        print("Gemini API Error, offline reply:", e)
+        return get_offline_reply(prompt)
+
+async def get_ai_reply(prompt):
+    try:
+        return await asyncio.to_thread(get_ai_reply_sync, prompt)
+    except Exception as e:
+        print("AI thread error:", e)
+        return get_offline_reply(prompt)
+
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+
+async def get_confess_channel():
+    if CONFESS_CHANNEL_ID != 0:
+        ch = bot.get_channel(CONFESS_CHANNEL_ID)
+        if ch:
+            return ch
+    for ch in bot.get_all_channels():
+        if isinstance(ch, discord.TextChannel) and "confess" in ch.name.lower():
+            return ch
+    return None
+
+@bot.event
+async def on_ready():
+    print(f"{bot.user} is online")
+    try:
+        synced = await bot.tree.sync()
+        print(f"{len(synced)} slash commands sync ho gaye")
+    except Exception as e:
+        print("Sync Error:", e)
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    if bot.user in message.mentions:
+        prompt = message.content.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip()
+        if not prompt:
+            await message.reply("Haan bhai bol, Modih yahin hai. Neend nahi aa rahi ya dil ki baat karni hai?")
+            return
+        async with message.channel.typing():
+            reply = await get_ai_reply(prompt)
+            await message.reply(reply[:2000])
+        return
+    await bot.process_commands(message)
+
+@bot.command(name="ai")
+async def ai_prefix(ctx, *, prompt=None):
+    if not prompt:
+        await ctx.send("Aise likh: !ai mujhe ek shayari suna")
+        return
+    async with ctx.typing():
+        reply = await get_ai_reply(prompt)
+        await ctx.send(reply[:2000])
+
+@bot.command(name="confess")
+async def confess_prefix(ctx, *, msg=None):
+    if not msg:
+        await ctx.send("Aise likh: !confess mujhe kisi pe crush hai")
+        return
+    channel = await get_confess_channel()
+    if not channel:
+        await ctx.send("Confess channel nahi mila. Channel ka naam confess rakho ya ID upar daalo.")
+        return
+    embed = discord.Embed(title="Anonymous Confession", description=msg, color=discord.Color.purple())
+    embed.set_footer(text="Aise Hi - Anonymous")
+    await channel.send(embed=embed)
+    try:
+        await ctx.message.delete()
+    except:
+        pass
+    await ctx.send("Tera confess anonymously bhej diya hai", delete_after=5)
+
+@bot.command(name="help")
+async def help_prefix(ctx):
+    await ctx.send("Modih Commands:\n!ai <sawal> - Modih se baat kar\n!confess <baat> - Anonymous confess\n@Modih <sawal> - Mention karke baat kar")
+
+@bot.tree.command(name="ai", description="Modih se kuch bhi puch")
+async def ai_slash(interaction: discord.Interaction, prompt: str):
+    try:
+        await interaction.response.defer()
+    except:
+        pass
+    try:
+        reply = await get_ai_reply(prompt)
+        await interaction.followup.send(reply[:2000])
+    except Exception as e:
+        print("Slash /ai error:", e)
+        try:
+            await interaction.followup.send("Haan bhai bol, Modih yahin hai. Thoda network slow tha, dobara bol.")
+        except:
+            pass
+
+@bot.tree.command(name="confess", description="Anonymous confess bhejo")
+async def confess_slash(interaction: discord.Interaction, message: str):
+    try:
+        await interaction.response.send_message("Tera confess anonymously bhej diya hai", ephemeral=True)
+    except:
+        return
+    channel = await get_confess_channel()
+    if channel:
+        embed = discord.Embed(title="Anonymous Confession", description=message, color=discord.Color.purple())
+        embed.set_footer(text="Aise Hi - Anonymous")
+        await channel.send(embed=embed)
+
+@bot.tree.command(name="help", description="Modih ke commands dekho")
+async def help_slash(interaction: discord.Interaction):
+    await interaction.response.send_message("Modih Commands:\n!ai <sawal> / /ai - Modih se baat kar\n!confess <baat> / /confess - Anonymous confess\n@Modih <sawal> - Mention karke baat kar")
+
+if not DISCORD_TOKEN:
+    print("DISCORD_TOKEN nahi mila! Upar wali line me apna token daalo")
+else:
+    try:
+        bot.run(DISCORD_TOKEN)
+    except discord.LoginFailure:
+        print("TOKEN GALAT HAI! Developer Portal se Reset Token karke naya token upar daalo.")
+    except Exception as e:
+        print("Login Error:", e)
